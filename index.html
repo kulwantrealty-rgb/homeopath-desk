@@ -302,6 +302,12 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--main-bg)
       <button class="btn-primary" onclick="runRepertory()">Look Up Rubric</button>
       <div class="loading-bar" id="rep-loading"><div class="spinner"></div>Searching repertory…</div>
     </div>
+    <div style="margin-top:28px;padding:16px;background:var(--pill-bg);border:1.5px dashed var(--pill-border);border-radius:8px;">
+      <div class="section-label" style="margin-top:0;">Upload Your Repertory File</div>
+      <p class="hint" style="margin-bottom:10px;">Upload a JSON repertory file to supplement the built-in database. Format: array of objects with rubric, source, remedies (object with remedy codes and grades 1–4), and crossRef fields.</p>
+      <input type="file" id="rep-upload" accept=".json,.txt" onchange="handleRepUpload(this)" style="font-size:.8rem;color:var(--text-muted);">
+      <div id="upload-status" style="font-size:.72rem;color:#4caf82;margin-top:6px;letter-spacing:.06em;"></div>
+    </div>
     <div class="result-box" id="rep-result">
       <div class="result-label">Rubric &amp; Remedy Results</div>
       <div class="result-content" id="rep-result-content"></div>
@@ -493,87 +499,593 @@ function toast(msg,dur=3000){
 }
 function closeModal(){document.getElementById('load-modal').classList.remove('show');}
 
-// ── CLAUDE API ─────────────────────────────────────────────────────────────
-async function callClaude(prompt,sys,resultBoxId){
-  const box=document.getElementById(resultBoxId);
-  const content=document.getElementById(resultBoxId+'-content');
-  box.classList.add('show'); content.textContent='';
-  const res=await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({model:"claude-sonnet-4-5",max_tokens:1000,system:sys,messages:[{role:"user",content:prompt}]})
-  });
-  if(!res.ok){const e=await res.json().catch(()=>({}));throw new Error((e.error&&e.error.message)||'API error '+res.status);}
-  const data=await res.json();
-  const text=data.content.map(b=>b.text||'').join('');
-  content.textContent=text;
-  box.scrollIntoView({behavior:'smooth',block:'nearest'});
+// ══════════════════════════════════════════════════════════════════════════
+// LOCAL REPERTORY DATABASE (Kent · Boericke · Boenninghausen)
+// Grade: 4=bold/black, 3=italic, 2=plain, 1=small
+// ══════════════════════════════════════════════════════════════════════════
+const REPERTORY = [
+  // ── MIND ──
+  {rubric:"Mind; Anxiety; general",source:"Kent",remedies:{Ars:4,Phos:3,Calc:3,Nux_v:3,Lyc:3,Sulph:2,Ign:2,Sep:2,Nat_m:2,Puls:2},crossRef:["Mind; Fear; general","Mind; Restlessness"]},
+  {rubric:"Mind; Anxiety; health, about",source:"Kent",remedies:{Ars:4,Calc:4,Nit_ac:3,Nux_v:3,Kali_ar:3,Phos:2,Lyc:2},crossRef:["Mind; Fear; death, of","Mind; Hypochondriasis"]},
+  {rubric:"Mind; Anxiety; conscience, of (as if guilty)",source:"Kent",remedies:{Dig:4,Coc_c:3,Ars:3,Aur:3,Obad:2},crossRef:["Mind; Guilt","Mind; Remorse"]},
+  {rubric:"Mind; Fear; death, of",source:"Kent",remedies:{Ars:4,Acon:4,Phos:3,Plat:3,Nit_ac:3,Calc:2,Puls:2},crossRef:["Mind; Anxiety; health, about","Mind; Presentiment of death"]},
+  {rubric:"Mind; Fear; alone, of being",source:"Kent",remedies:{Ars:4,Bis:4,Lyc:3,Phos:3,Kali_c:3,Stram:2},crossRef:["Mind; Company; desire for","Mind; Anxiety"]},
+  {rubric:"Mind; Grief; general",source:"Kent",remedies:{Ign:4,Nat_m:4,Staph:3,Caust:3,Phos_ac:3,Calc_p:2,Sep:2,Puls:2},crossRef:["Mind; Ailments from grief","Mind; Weeping"]},
+  {rubric:"Mind; Irritability; general",source:"Kent",remedies:{Nux_v:4,Cham:4,Lyc:3,Sep:3,Bry:3,Sulph:3,Staph:2,Ign:2},crossRef:["Mind; Anger","Mind; Impatience"]},
+  {rubric:"Mind; Weeping; general",source:"Kent",remedies:{Puls:4,Ign:3,Sep:3,Nat_m:3,Lyc:2,Caust:2,Graph:2},crossRef:["Mind; Grief","Mind; Sadness"]},
+  {rubric:"Mind; Sadness; general",source:"Kent",remedies:{Nat_m:4,Sep:4,Aur:4,Puls:3,Ign:3,Calc:3,Lyc:2,Graph:2},crossRef:["Mind; Despair","Mind; Weeping"]},
+  {rubric:"Mind; Fear; dark, of",source:"Kent",remedies:{Acon:3,Calc:3,Carb_v:3,Phos:3,Stram:4,Lyc:2,Stront:2},crossRef:["Mind; Fear; night","Mind; Fear; ghosts"]},
+  {rubric:"Mind; Restlessness; general",source:"Kent",remedies:{Ars:4,Rhus_t:4,Acon:3,Cham:3,Sulph:3,Caust:2,Lyc:2},crossRef:["Mind; Anxiety","Mind; Hurry"]},
+  {rubric:"Mind; Concentration; difficult",source:"Kent",remedies:{Calc_p:3,Nux_v:3,Lyc:3,Phos_ac:3,Sulph:2,Bar_c:2,Agn:2},crossRef:["Mind; Memory; weakness","Mind; Dullness"]},
+  {rubric:"Mind; Haughty",source:"Kent",remedies:{Plat:4,Lyc:3,Pall:3,Sulph:3,Verat:3,Nux_v:2},crossRef:["Mind; Arrogance","Mind; Egotism"]},
+  {rubric:"Mind; Jealousy",source:"Kent",remedies:{Hyos:4,Lach:4,Nux_v:3,Puls:3,Apis:3,Calc_p:2},crossRef:["Mind; Envy","Mind; Suspicious"]},
+
+  // ── HEAD ──
+  {rubric:"Head; Pain; general",source:"Kent",remedies:{Bry:4,Bell:4,Nat_m:4,Glon:3,Nux_v:3,Sulph:3,Calc:2,Lyc:2,Sil:2},crossRef:["Head; Pain; sides","Head; Pain; forehead"]},
+  {rubric:"Head; Pain; right side",source:"Kent",remedies:{Sang:4,Iris:4,Bell:3,Lyc:3,Chel:3,Sil:2},crossRef:["Head; Pain; temples","Head; Pain; general"]},
+  {rubric:"Head; Pain; left side",source:"Kent",remedies:{Lach:3,Spig:4,Thuj:3,Nux_v:2,Graph:2},crossRef:["Head; Pain; general","Head; Pain; temples"]},
+  {rubric:"Head; Pain; forehead",source:"Kent",remedies:{Bry:4,Bell:3,Sulph:3,Nux_v:3,Ars:2,Puls:2,Gels:2},crossRef:["Head; Pain; general","Head; Pain; occiput"]},
+  {rubric:"Head; Pain; occiput",source:"Kent",remedies:{Gels:4,Petr:3,Calc_p:3,Sil:3,Bell:2,Nat_m:2},crossRef:["Head; Pain; general","Neck; Pain"]},
+  {rubric:"Head; Pain; throbbing",source:"Kent",remedies:{Bell:4,Glon:4,Sang:3,Nat_m:3,Bry:3,Ferr:3},crossRef:["Head; Pain; pulsating","Head; Congestion"]},
+  {rubric:"Head; Pain; morning on waking",source:"Kent",remedies:{Nux_v:4,Lyc:3,Lach:3,Sulph:3,Bry:2},crossRef:["Head; Pain; general","Sleep; Waking"]},
+  {rubric:"Head; Pain; better pressure",source:"Kent",remedies:{Bry:4,Puls:3,Ind:3,Meny:3},crossRef:["Head; Pain; worse motion","Head; Pain; general"]},
+  {rubric:"Head; Pain; worse light",source:"Kent",remedies:{Bell:4,Nat_m:4,Sang:3,Sil:3,Glon:3,Bry:2},crossRef:["Head; Pain; worse noise","Eyes; Photophobia"]},
+  {rubric:"Head; Pain; migraine",source:"Boericke",remedies:{Iris:4,Sang:4,Nat_m:4,Glon:3,Sil:3,Spig:3,Lac_d:3},crossRef:["Head; Pain; periodic","Head; Pain; throbbing"]},
+
+  // ── EYES ──
+  {rubric:"Eyes; Inflammation; conjunctiva",source:"Kent",remedies:{Arg_n:4,Euphr:4,Puls:3,Sulph:3,Bell:3,Apis:3,Ars:2},crossRef:["Eyes; Discharge","Eyes; Redness"]},
+  {rubric:"Eyes; Photophobia",source:"Kent",remedies:{Bell:4,Nat_m:3,Sulph:3,Acon:3,Merc:3,Graph:2},crossRef:["Eyes; Pain; light agg","Head; Pain; worse light"]},
+  {rubric:"Eyes; Discharge; general",source:"Kent",remedies:{Puls:4,Arg_n:4,Euphr:3,Nat_m:3,Merc:3,Sulph:2},crossRef:["Eyes; Inflammation","Eyes; Lachrymation"]},
+
+  // ── EARS ──
+  {rubric:"Ear; Pain; general",source:"Kent",remedies:{Cham:4,Bell:4,Merc:3,Puls:3,Calc:3,Kali_m:2},crossRef:["Ear; Inflammation","Ear; Discharge"]},
+  {rubric:"Ear; Noises; ringing (tinnitus)",source:"Kent",remedies:{Chin:4,Carb_v:3,Graph:3,Nat_m:3,Sil:3,Kali_c:2},crossRef:["Ear; Noises; buzzing","Hearing; Impaired"]},
+  {rubric:"Ear; Discharge; general",source:"Kent",remedies:{Puls:4,Merc:4,Calc:3,Sil:3,Kali_m:3,Tellurium:3},crossRef:["Ear; Inflammation","Ear; Pain"]},
+
+  // ── NOSE ──
+  {rubric:"Nose; Coryza; general",source:"Kent",remedies:{Ars:4,All_c:4,Euphr:3,Nat_m:3,Puls:3,Nux_v:3,Merc:2},crossRef:["Nose; Discharge","Nose; Sneezing"]},
+  {rubric:"Nose; Discharge; acrid",source:"Kent",remedies:{Ars:4,All_c:4,Euphr:3,Merc_c:3,Nit_ac:3},crossRef:["Nose; Coryza","Nose; Discharge; general"]},
+  {rubric:"Nose; Discharge; bland",source:"Kent",remedies:{Euphr:4,Puls:4,Nat_m:2,Kali_s:2},crossRef:["Nose; Coryza","Eyes; Lachrymation; acrid"]},
+  {rubric:"Nose; Obstruction",source:"Kent",remedies:{Nux_v:4,Samb:4,Am_c:3,Lyc:3,Kali_bi:3,Sticta:3},crossRef:["Nose; Coryza","Respiration; Difficult"]},
+  {rubric:"Nose; Sneezing",source:"Kent",remedies:{Ars:3,All_c:4,Euphr:3,Nat_m:3,Sabadilla:4,Sticta:3},crossRef:["Nose; Coryza","Nose; Discharge"]},
+
+  // ── FACE ──
+  {rubric:"Face; Pain; neuralgia",source:"Kent",remedies:{Ars:4,Mag_p:4,Spig:4,Caust:3,Coloc:3,Verb:3},crossRef:["Face; Pain; right","Face; Pain; left"]},
+  {rubric:"Face; Eruptions; acne",source:"Boericke",remedies:{Sulph:4,Calc:3,Bell:3,Kali_br:3,Puls:3,Sil:3,Graph:2,Nat_m:2},crossRef:["Face; Eruptions","Skin; Eruptions; acne"]},
+
+  // ── MOUTH / THROAT ──
+  {rubric:"Throat; Pain; general",source:"Kent",remedies:{Bell:4,Merc:4,Lach:3,Apis:3,Phyt:3,Nit_ac:3,Ign:2},crossRef:["Throat; Inflammation","Throat; Pain; swallowing"]},
+  {rubric:"Throat; Pain; swallowing on",source:"Kent",remedies:{Bell:4,Merc:4,Lach:3,Nit_ac:3,Phyt:3,Ign:3,Apis:2},crossRef:["Throat; Pain; general","Throat; Inflammation"]},
+  {rubric:"Throat; Pain; left side",source:"Kent",remedies:{Lach:4,Naja:3,Lact:3,Sulph:2},crossRef:["Throat; Pain; general","Throat; Inflammation"]},
+  {rubric:"Throat; Pain; right side",source:"Kent",remedies:{Bell:4,Merc_i_f:4,Lyc:3,Phyt:2},crossRef:["Throat; Pain; general","Throat; Inflammation"]},
+  {rubric:"Mouth; Dryness",source:"Kent",remedies:{Bry:4,Bell:4,Nux_m:4,Puls:3,Ars:3,Lyc:2},crossRef:["Mouth; Thirst","Stomach; Thirst"]},
+  {rubric:"Mouth; Ulcers; aphthae",source:"Kent",remedies:{Borax:4,Merc:4,Nit_ac:3,Sulph:3,Ars:3,Nat_m:2},crossRef:["Mouth; Ulcers","Throat; Inflammation"]},
+
+  // ── STOMACH ──
+  {rubric:"Stomach; Nausea; general",source:"Kent",remedies:{Ipec:4,Nux_v:4,Puls:3,Ant_t:3,Ars:3,Sep:3,Tab:3,Colch:2},crossRef:["Stomach; Vomiting","Stomach; Nausea; morning"]},
+  {rubric:"Stomach; Nausea; morning",source:"Kent",remedies:{Nux_v:4,Sep:4,Puls:3,Bry:3,Calc:2},crossRef:["Stomach; Nausea; general","Female; Morning sickness"]},
+  {rubric:"Stomach; Vomiting; general",source:"Kent",remedies:{Ipec:4,Ars:4,Ant_t:3,Phos:3,Nux_v:3,Verat:3,Tab:3},crossRef:["Stomach; Nausea","Stomach; Vomiting; food"]},
+  {rubric:"Stomach; Thirst; extreme",source:"Kent",remedies:{Ars:4,Bry:4,Nat_m:3,Sulph:3,Verat:3,Phos:3},crossRef:["Stomach; Thirst; cold water","Mouth; Dryness"]},
+  {rubric:"Stomach; Thirst; absent (thirstless)",source:"Kent",remedies:{Puls:4,Apis:4,Ant_t:3,Gels:3,Lyc:2,Chin:2},crossRef:["Stomach; Thirst; general","Generals; Thirst"]},
+  {rubric:"Stomach; Appetite; increased",source:"Kent",remedies:{Lyc:3,Calc:3,Iod:4,Chin:3,Nat_m:2,Sulph:3},crossRef:["Stomach; Hunger","Stomach; Appetite; ravenous"]},
+  {rubric:"Stomach; Appetite; lost",source:"Kent",remedies:{Chin:4,Ars:3,Lyc:3,Nux_v:3,Puls:2,Sep:2},crossRef:["Stomach; Appetite; general","Stomach; Nausea"]},
+  {rubric:"Stomach; Pain; burning",source:"Kent",remedies:{Ars:4,Canth:4,Iris:3,Sulph:3,Phos:3,Carb_v:2},crossRef:["Stomach; Pain; general","Stomach; Heartburn"]},
+  {rubric:"Stomach; Heartburn",source:"Kent",remedies:{Calc:4,Nux_v:4,Carb_v:3,Sulph:3,Rob:3,Nat_c:3,Puls:2},crossRef:["Stomach; Pain; burning","Stomach; Regurgitation"]},
+  {rubric:"Stomach; Desires; cold drinks",source:"Kent",remedies:{Phos:4,Bry:3,Verat:3,Nat_m:2,Caust:2},crossRef:["Stomach; Thirst; cold water","Generals; Warm food agg"]},
+  {rubric:"Stomach; Desires; sweets",source:"Kent",remedies:{Lyc:4,Arg_n:4,Sulph:3,Calc:3,Ant_c:3,Med:2},crossRef:["Stomach; Desires; general","Stomach; Aversion; sweets"]},
+  {rubric:"Stomach; Desires; salt",source:"Kent",remedies:{Nat_m:4,Calc:3,Carb_v:3,Phos:3,Verat:2},crossRef:["Stomach; Desires; general","Generals; Salt"]},
+
+  // ── ABDOMEN ──
+  {rubric:"Abdomen; Pain; general",source:"Kent",remedies:{Coloc:4,Mag_p:4,Nux_v:3,Bry:3,Lyc:3,Cocc:3,Bell:3,Plumb:2},crossRef:["Abdomen; Pain; cramping","Abdomen; Pain; better bending double"]},
+  {rubric:"Abdomen; Pain; better bending double",source:"Kent",remedies:{Coloc:4,Mag_p:4,Cocc:3,Staph:3},crossRef:["Abdomen; Pain; general","Abdomen; Pain; cramping"]},
+  {rubric:"Abdomen; Pain; cramping",source:"Kent",remedies:{Coloc:4,Mag_p:4,Nux_v:3,Cham:3,Cupr:3,Dios:3},crossRef:["Abdomen; Pain; general","Abdomen; Colic"]},
+  {rubric:"Abdomen; Distension; flatulence",source:"Kent",remedies:{Lyc:4,Carb_v:4,Chin:4,Arg_n:3,Nux_v:3,Sulph:3,Nat_s:2},crossRef:["Abdomen; Flatulence","Rectum; Flatus"]},
+  {rubric:"Abdomen; Pain; right side; lower",source:"Kent",remedies:{Lyc:4,Bell:3,Merc:3,Iris_t:3},crossRef:["Abdomen; Pain; general","Abdomen; Appendix"]},
+
+  // ── RECTUM / STOOL ──
+  {rubric:"Rectum; Constipation; general",source:"Kent",remedies:{Bry:4,Lyc:4,Nux_v:4,Sulph:3,Sil:3,Calc:3,Plumb:3,Op:2},crossRef:["Rectum; Inactivity","Stool; Hard"]},
+  {rubric:"Rectum; Diarrhoea; general",source:"Kent",remedies:{Podo:4,Sulph:4,Ars:4,Puls:3,Merc:3,China:3,Aloe:3,Gamb:3},crossRef:["Stool; Loose","Rectum; Diarrhoea; morning"]},
+  {rubric:"Rectum; Diarrhoea; morning; driving out of bed",source:"Kent",remedies:{Sulph:4,Podo:4,Rumx:3,Nat_s:3,Aloe:3},crossRef:["Rectum; Diarrhoea; general","Rectum; Urgency"]},
+  {rubric:"Rectum; Haemorrhoids",source:"Kent",remedies:{Aesc:4,Sulph:4,Nux_v:3,Aloe:3,Calc_f:3,Ham:3,Mur_ac:3},crossRef:["Rectum; Pain","Rectum; Bleeding"]},
+
+  // ── URINARY ──
+  {rubric:"Bladder; Urging; frequent",source:"Kent",remedies:{Canth:4,Apis:4,Merc:3,Nux_v:3,Puls:3,Caust:3,Eup_pur:3},crossRef:["Bladder; Urging; constant","Urine; Frequent"]},
+  {rubric:"Urine; Burning; during urination",source:"Kent",remedies:{Canth:4,Apis:4,Ars:3,Berb:3,Merc_c:3,Sars:3},crossRef:["Bladder; Inflammation","Urine; Scanty"]},
+  {rubric:"Bladder; Inflammation; cystitis",source:"Boericke",remedies:{Canth:4,Apis:3,Berb:3,Merc_c:3,Staph:3,Eup_pur:3},crossRef:["Urine; Burning","Bladder; Urging; frequent"]},
+
+  // ── FEMALE ──
+  {rubric:"Female; Menses; painful (dysmenorrhoea)",source:"Kent",remedies:{Mag_p:4,Cocc:4,Cham:4,Bell:3,Puls:3,Sep:3,Vib:3,Con:2},crossRef:["Female; Menses; general","Abdomen; Pain; menses during"]},
+  {rubric:"Female; Menses; late",source:"Kent",remedies:{Puls:4,Graph:4,Sep:3,Calc:3,Nat_m:3,Lyc:2},crossRef:["Female; Menses; general","Female; Amenorrhoea"]},
+  {rubric:"Female; Menses; early",source:"Kent",remedies:{Calc:4,Ipec:3,Nux_v:3,Bell:3,Erig:3},crossRef:["Female; Menses; general","Female; Menorrhagia"]},
+  {rubric:"Female; Menses; scanty",source:"Kent",remedies:{Puls:4,Graph:3,Nat_m:3,Lyc:3,Sep:2},crossRef:["Female; Menses; late","Female; Amenorrhoea"]},
+  {rubric:"Female; Leucorrhoea; general",source:"Kent",remedies:{Sep:4,Calc:4,Graph:3,Puls:3,Nat_m:3,Bor:3,Kali_bi:3},crossRef:["Female; Leucorrhoea; acrid","Female; Leucorrhoea; bland"]},
+  {rubric:"Female; Menopause; symptoms",source:"Boericke",remedies:{Lach:4,Sep:4,Sulph:3,Calc:3,Graph:3,Sang:3,Glon:2},crossRef:["Generals; Flushes of heat","Female; Menses; general"]},
+
+  // ── RESPIRATORY ──
+  {rubric:"Respiration; Difficult; general",source:"Kent",remedies:{Ars:4,Ant_t:4,Carb_v:4,Ipec:3,Sulph:3,Nat_s:3,Lach:3,Puls:2},crossRef:["Chest; Asthma","Respiration; Wheezing"]},
+  {rubric:"Chest; Asthma",source:"Boericke",remedies:{Ars:4,Ant_t:4,Ipec:4,Nat_s:3,Carb_v:3,Blatta:3,Meph:3,Samb:3},crossRef:["Respiration; Difficult","Respiration; Wheezing"]},
+  {rubric:"Cough; general",source:"Kent",remedies:{Dros:4,Ipec:4,Rumx:3,Ant_t:3,Bry:3,Sulph:3,Phos:3,Spongia:3},crossRef:["Cough; dry","Cough; loose"]},
+  {rubric:"Cough; dry",source:"Kent",remedies:{Bry:4,Dros:4,Bell:3,Phos:3,Rumx:3,Spongia:3,Nux_v:2},crossRef:["Cough; general","Cough; night"]},
+  {rubric:"Cough; loose; rattling",source:"Kent",remedies:{Ant_t:4,Ipec:3,Kali_bi:3,Hep:3,Sulph:3},crossRef:["Cough; general","Chest; Mucus"]},
+  {rubric:"Cough; night",source:"Kent",remedies:{Dros:4,Hyos:4,Rumx:3,Sulph:3,Cham:3,Spongia:2},crossRef:["Cough; general","Cough; dry"]},
+  {rubric:"Chest; Pain; general",source:"Kent",remedies:{Bry:4,Ars:4,Phos:3,Ran_b:3,Kali_c:3,Nat_m:2},crossRef:["Chest; Pain; stitching","Chest; Inflammation; pneumonia"]},
+
+  // ── BACK ──
+  {rubric:"Back; Pain; lumbar region",source:"Kent",remedies:{Rhus_t:4,Bry:4,Nat_m:3,Kali_c:3,Arn:3,Berb:3,Calc:2,Sulph:2},crossRef:["Back; Pain; general","Extremities; Pain; lower limbs"]},
+  {rubric:"Back; Pain; cervical region",source:"Kent",remedies:{Calc_p:4,Cimex:3,Lachn:3,Nat_m:3,Rhus_t:3,Hyper:2},crossRef:["Back; Pain; general","Head; Pain; occiput"]},
+  {rubric:"Back; Pain; better motion",source:"Kent",remedies:{Rhus_t:4,Ferr:3,Puls:3,Lyc:2},crossRef:["Back; Pain; worse motion","Back; Stiffness"]},
+  {rubric:"Back; Pain; worse motion",source:"Kent",remedies:{Bry:4,Nux_v:3,Kali_c:3,Colch:3},crossRef:["Back; Pain; better rest","Back; Pain; lumbar"]},
+
+  // ── EXTREMITIES ──
+  {rubric:"Extremities; Pain; joints",source:"Kent",remedies:{Rhus_t:4,Bry:4,Calc:3,Lyc:3,Puls:3,Colch:3,Led:3,Act_sp:3},crossRef:["Extremities; Pain; general","Extremities; Swelling; joints"]},
+  {rubric:"Extremities; Pain; better motion",source:"Kent",remedies:{Rhus_t:4,Ferr:4,Puls:3,Lyc:2,Duls:2},crossRef:["Extremities; Stiffness","Extremities; Pain; worse rest"]},
+  {rubric:"Extremities; Pain; worse motion",source:"Kent",remedies:{Bry:4,Colch:4,Led:3,Kali_c:3,Nux_v:2},crossRef:["Extremities; Pain; better rest","Extremities; Inflammation"]},
+  {rubric:"Extremities; Swelling; joints",source:"Kent",remedies:{Apis:4,Bry:4,Colch:3,Led:3,Puls:3,Rhus_t:3,Calc:2},crossRef:["Extremities; Pain; joints","Extremities; Redness"]},
+  {rubric:"Extremities; Numbness",source:"Kent",remedies:{Acon:4,Cocc:3,Graph:3,Nat_m:3,Phos:3,Rhus_t:2},crossRef:["Extremities; Tingling","Extremities; Formication"]},
+  {rubric:"Extremities; Cramps; calves",source:"Kent",remedies:{Calc:4,Cup:4,Lyc:3,Nat_m:3,Sulph:3,Verat:3},crossRef:["Extremities; Cramps; general","Extremities; Pain; lower limbs"]},
+
+  // ── SLEEP ──
+  {rubric:"Sleep; Sleeplessness (insomnia); general",source:"Kent",remedies:{Coff:4,Nux_v:4,Acon:3,Ars:3,Puls:3,Passiflora:3,Calc:2,Ign:2},crossRef:["Sleep; Sleeplessness; excitement","Sleep; Sleeplessness; thoughts"]},
+  {rubric:"Sleep; Sleeplessness; thoughts from",source:"Kent",remedies:{Coff:4,Calc:3,Nux_v:3,Op:3,Arn:3},crossRef:["Sleep; Sleeplessness; general","Mind; Restlessness; night"]},
+  {rubric:"Sleep; Position; on back",source:"Kent",remedies:{Ars:3,Nux_v:3,Puls:2},crossRef:["Sleep; Position; general","Sleep; Restless"]},
+  {rubric:"Sleep; Unrefreshing",source:"Kent",remedies:{Calc:3,Lach:3,Nux_v:3,Op:3,Sulph:3,Nat_m:2},crossRef:["Sleep; General","Mind; Dullness; morning"]},
+  {rubric:"Dreams; Anxious",source:"Kent",remedies:{Acon:3,Ars:3,Calc:3,Puls:3,Nat_m:3,Sulph:2},crossRef:["Sleep; Sleeplessness","Mind; Anxiety"]},
+
+  // ── SKIN ──
+  {rubric:"Skin; Eruptions; general",source:"Kent",remedies:{Sulph:4,Graph:4,Merc:3,Calc:3,Lyc:3,Nat_m:3,Sep:2,Sil:2},crossRef:["Skin; Itching","Skin; Eruptions; type"]},
+  {rubric:"Skin; Itching; general",source:"Kent",remedies:{Sulph:4,Dol:4,Alum:3,Graph:3,Merc:3,Nat_m:3,Rhus_t:3},crossRef:["Skin; Eruptions","Skin; Itching; worse warmth"]},
+  {rubric:"Skin; Itching; worse warmth of bed",source:"Kent",remedies:{Sulph:4,Merc:4,Alum:3,Led:3,Dol:3},crossRef:["Skin; Itching; general","Generals; Warmth; agg"]},
+  {rubric:"Skin; Eruptions; urticaria (hives)",source:"Kent",remedies:{Apis:4,Urt_u:4,Nat_m:3,Rhus_t:3,Dulc:3,Sulph:2},crossRef:["Skin; Eruptions; general","Skin; Itching"]},
+  {rubric:"Skin; Eruptions; eczema",source:"Boericke",remedies:{Graph:4,Sulph:4,Merc:3,Nat_m:3,Sep:3,Lyc:3,Rhus_t:3},crossRef:["Skin; Eruptions; general","Skin; Itching"]},
+  {rubric:"Skin; Dryness",source:"Kent",remedies:{Sulph:4,Alum:4,Bry:3,Nux_v:3,Nat_m:3,Sars:2},crossRef:["Skin; Eruptions","Skin; Itching"]},
+
+  // ── GENERALS ──
+  {rubric:"Generals; Weakness; general",source:"Kent",remedies:{Ars:4,Chin:4,Carb_v:4,Phos_ac:3,Calc:3,Lyc:3,Sep:3,Staph:2},crossRef:["Generals; Exhaustion","Generals; Debility"]},
+  {rubric:"Generals; Chilly; general",source:"Boenninghausen",remedies:{Calc:4,Sil:4,Lyc:3,Nux_v:3,Kali_c:3,Ars:3,Graph:3,Bar_c:2},crossRef:["Generals; Cold; agg","Generals; Warmth; amel"]},
+  {rubric:"Generals; Warmth agg",source:"Boenninghausen",remedies:{Sulph:4,Puls:4,Apis:4,Iod:3,Led:3,Lyc:3,Nat_m:3},crossRef:["Generals; Cold; amel","Generals; Chilly"]},
+  {rubric:"Generals; Warmth amel",source:"Boenninghausen",remedies:{Ars:4,Nux_v:4,Rhus_t:4,Sil:4,Lyc:3,Kali_c:3,Calc:3},crossRef:["Generals; Cold; agg","Generals; Chilly"]},
+  {rubric:"Generals; Flushes of heat",source:"Kent",remedies:{Lach:4,Sulph:4,Sep:4,Sang:3,Glon:3,Bell:3,Calc:2},crossRef:["Generals; Perspiration","Female; Menopause"]},
+  {rubric:"Generals; Food; desire; meat",source:"Kent",remedies:{Mag_c:3,Calc_p:3,Nit_ac:3,Sulph:2},crossRef:["Stomach; Desires","Generals; Food"]},
+  {rubric:"Generals; Perspiration; profuse",source:"Kent",remedies:{Calc:4,Merc:4,Sil:3,Verat:3,China:3,Hep:3},crossRef:["Generals; Perspiration; offensive","Generals; Perspiration; general"]},
+  {rubric:"Generals; Sides; right",source:"Boenninghausen",remedies:{Lyc:4,Bell:3,Chel:3,Sang:3,Iris:3},crossRef:["Generals; Sides; general","Generals; Laterality"]},
+  {rubric:"Generals; Sides; left",source:"Boenninghausen",remedies:{Lach:4,Spig:4,Thuj:3,Nat_m:3},crossRef:["Generals; Sides; general","Generals; Laterality"]},
+  {rubric:"Generals; Better; motion",source:"Boenninghausen",remedies:{Rhus_t:4,Ferr:4,Puls:3,Lyc:3,Sep:3},crossRef:["Generals; Worse; rest","Generals; Stiffness"]},
+  {rubric:"Generals; Worse; motion",source:"Boenninghausen",remedies:{Bry:4,Colch:4,Led:3,Nux_v:3,Gels:3},crossRef:["Generals; Better; rest","Generals; Pain; worse motion"]},
+  {rubric:"Generals; Worse; cold wet weather",source:"Boenninghausen",remedies:{Rhus_t:4,Dulc:4,Calc:3,Nat_s:3,Aran:3},crossRef:["Generals; Worse; cold","Generals; Worse; damp"]},
+  {rubric:"Generals; Worse; night",source:"Boenninghausen",remedies:{Ars:4,Merc:4,Syph:4,Rhus_t:3,Sulph:3,Puls:2},crossRef:["Generals; Worse; general","Sleep; Sleeplessness"]},
+  {rubric:"Generals; Worse; 3am",source:"Kent",remedies:{Ars:4,Kali_c:4,Thuj:3,Nat_s:3},crossRef:["Generals; Worse; night","Generals; Periodicity"]},
+  {rubric:"Generals; Worse; morning",source:"Boenninghausen",remedies:{Nux_v:4,Lyc:3,Sulph:3,Lach:3,Bry:2},crossRef:["Generals; Worse; general","Sleep; Unrefreshing"]},
+];
+
+// Remedy full names map
+const REMEDY_NAMES = {
+  Acon:"Aconitum napellus",All_c:"Allium cepa",Aloe:"Aloe socotrina",Alum:"Alumina",Am_c:"Ammonium carbonicum",
+  Apis:"Apis mellifica",Arg_n:"Argentum nitricum",Arn:"Arnica montana",Ars:"Arsenicum album",Aur:"Aurum metallicum",
+  Bar_c:"Baryta carbonica",Bell:"Belladonna",Berb:"Berberis vulgaris",Borax:"Borax",Bry:"Bryonia alba",
+  Calc:"Calcarea carbonica",Calc_f:"Calcarea fluorica",Calc_p:"Calcarea phosphorica",Canth:"Cantharis",Carb_v:"Carbo vegetabilis",
+  Caust:"Causticum",Cham:"Chamomilla",Chel:"Chelidonium",Chin:"China officinalis",Cocc:"Cocculus indicus",
+  Coff:"Coffea cruda",Colch:"Colchicum",Coloc:"Colocynthis",Con:"Conium",Cup:"Cuprum metallicum",
+  Dig:"Digitalis",Dros:"Drosera",Dulc:"Dulcamara",Euphr:"Euphrasia",Ferr:"Ferrum metallicum",
+  Gels:"Gelsemium",Glon:"Glonoine",Graph:"Graphites",Ham:"Hamamelis",Hep:"Hepar sulphuris",
+  Hyos:"Hyoscyamus",Hyper:"Hypericum",Ign:"Ignatia amara",Iod:"Iodum",Ipec:"Ipecacuanha",
+  Iris:"Iris versicolor",Kali_bi:"Kali bichromicum",Kali_c:"Kali carbonicum",Kali_m:"Kali muriaticum",Kali_s:"Kali sulphuricum",
+  Lach:"Lachesis",Led:"Ledum",Lyc:"Lycopodium",Mag_p:"Magnesia phosphorica",Merc:"Mercurius solubilis",
+  Merc_c:"Mercurius corrosivus",Nat_m:"Natrum muriaticum",Nat_s:"Natrum sulphuricum",Nit_ac:"Nitric acid",Nux_v:"Nux vomica",
+  Op:"Opium",Phos:"Phosphorus",Phos_ac:"Phosphoric acid",Phyt:"Phytolacca",Plumb:"Plumbum metallicum",
+  Podo:"Podophyllum",Puls:"Pulsatilla",Rhus_t:"Rhus toxicodendron",Sang:"Sanguinaria",Sep:"Sepia",
+  Sil:"Silicea",Spig:"Spigelia",Staph:"Staphysagria",Stram:"Stramonium",Sulph:"Sulphur",
+  Tab:"Tabacum",Thuj:"Thuja occidentalis",Verat:"Veratrum album",Vib:"Viburnum opulus",Lyc:"Lycopodium",
+  Aesc:"Aesculus hippocastanum",Act_sp:"Actaea spicata",Ant_t:"Antimonium tartaricum",Dol:"Dolichos",
+  Gamb:"Gamboge",Nat_c:"Natrum carbonicum",Rumx:"Rumex crispus",Rob:"Robinia",Sars:"Sarsaparilla",
+  Eup_pur:"Eupatorium purpureum",Agn:"Agnus castus",Bis:"Bismuth",Blatta:"Blatta orientalis",
+  Lac_d:"Lac defloratum",Meph:"Mephitis",Plat:"Platina",Pall:"Palladium",Cimex:"Cimex lectularius",
+  Lachn:"Lachnanthe",Dios:"Dioscorea",Urt_u:"Urtica urens",Merc_i_f:"Mercurius iodatus flavus",
+  Naja:"Naja tripudians",Lact:"Lactuca",Med:"Medorrhinum",Samb:"Sambucus",Spongia:"Spongia tosta",
+  Verb:"Verbascum",Kali_ar:"Kali arsenicosum",Cupr:"Cuprum metallicum",Ran_b:"Ranunculus bulbosus",
+  Sabadilla:"Sabadilla",Passiflora:"Passiflora",Erig:"Erigeron",Obad:"Obadiah",Coc_c:"Coccus cacti",
+  China:"China",Ferr:"Ferrum",Stront:"Strontium",Aran:"Aranea diadema",Syph:"Syphilinum",
+};
+
+// Uploaded repertory data store
+let uploadedRepertories = [];
+
+// ── REPERTORY FILE UPLOAD ───────────────────────────────────────────────────
+function handleRepUpload(input){
+  const file = input.files[0]; if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const data = JSON.parse(e.target.result);
+      if(Array.isArray(data)){
+        uploadedRepertories = uploadedRepertories.concat(data);
+        toast(`Loaded ${data.length} rubrics from ${file.name}`);
+        document.getElementById('upload-status').textContent = `✓ ${uploadedRepertories.length} rubrics loaded from uploaded files`;
+      } else { toast('Invalid format. JSON must be an array of rubric objects.'); }
+    } catch(err){
+      // Try plain text
+      const lines = e.target.result.split('\n').filter(l=>l.trim());
+      toast(`Loaded ${file.name} as text (${lines.length} lines). Use JSON format for full features.`);
+    }
+  };
+  reader.readAsText(file);
 }
 
-// ── REPERTORIZATION ────────────────────────────────────────────────────────
-async function runRepertorization(){
-  const complaint=v('i-complaint'); if(!complaint){document.getElementById('i-complaint').focus();return;}
+// ── SEARCH ENGINE ───────────────────────────────────────────────────────────
+function searchRepertory(query, gradeFilter, sourceFilter){
+  const terms = query.toLowerCase().split(/\s+/).filter(t=>t.length>1);
+  const allData = [...REPERTORY, ...uploadedRepertories];
+  const scored = allData.map(r => {
+    const rubricLower = r.rubric.toLowerCase();
+    let score = 0;
+    terms.forEach(t => {
+      if(rubricLower.includes(t)) score += rubricLower.startsWith(t.charAt(0).toUpperCase()+t.slice(1)) ? 3 : 2;
+    });
+    // Bonus for exact phrase
+    if(rubricLower.includes(query.toLowerCase())) score += 5;
+    return {...r, score};
+  }).filter(r => {
+    if(r.score === 0) return false;
+    if(sourceFilter && sourceFilter !== 'All' && r.source !== sourceFilter) return false;
+    return true;
+  }).sort((a,b) => b.score - a.score).slice(0, 12);
+  return scored;
+}
+
+function filterRemediesByGrade(remedies, gradeFilter){
+  const minGrade = gradeFilter === 'Grade 3–4 only (bold)' ? 3 : gradeFilter === 'Grade 4 only' ? 4 : 1;
+  return Object.entries(remedies)
+    .filter(([,g]) => g >= minGrade)
+    .sort((a,b) => b[1]-a[1]);
+}
+
+function gradeSymbol(g){ return g===4?'●●●●':g===3?'●●●':g===2?'●●':'●'; }
+function gradeName(g){ return g===4?'Grade 4 (Bold/Black)':g===3?'Grade 3 (Italic)':g===2?'Grade 2 (Plain)':'Grade 1 (Small)'; }
+
+function remedyName(code){ return REMEDY_NAMES[code] || code.replace(/_/g,' '); }
+
+// ── REPERTORIZATION ─────────────────────────────────────────────────────────
+function runRepertorization(){
+  const complaint = v('i-complaint');
+  if(!complaint){document.getElementById('i-complaint').focus();return;}
   document.getElementById('intake-result').classList.remove('show');
   showLoading('intake-loading');
-  const fields=[['Patient','i-name'],['Age/Sex','i-age'],['Constitution','i-constitution'],['Thermal','i-thermal'],['Amelioration','i-amel'],['Aggravation','i-aggr'],['Mentals','i-mental'],['Generals','i-generals'],['SRP','i-srp'],['Past Hx','i-past'],['Family Hx','i-family'],['Previous Remedies','i-prev']];
-  const lines=[`Chief Complaint: ${complaint}`];
-  fields.forEach(([l,id])=>{const val=v(id);if(val)lines.push(`${l}: ${val}`);});
-  const rep=v('i-repertory')||"Kent's Repertory";
-  const approach=v('i-approach')||"Classical";
-  const sparse=lines.length<=4;
-  const sys='You are an expert classical homeopathic physician. Respond concisely and directly to a qualified practitioner. No preamble, no disclaimers. Plain text only, no markdown.';
-  const prompt=sparse
-    ?`Limited case data — ${lines.join(' | ')} | Repertory: ${rep} | Approach: ${approach}\n\n1) Top 2 matching rubrics  2) Top 3 remedy candidates with brief keynote match  3) Suggested potency & dose  4) Two key questions to confirm.`
-    :`${lines.join('\n')}\nRepertory: ${rep} | Approach: ${approach}\n\n1) Symptom totality & hierarchy  2) Key rubrics (${rep})  3) Top 3 remedies with differentiating features  4) First prescription: remedy, potency, dose  5) Differentials if first fails`;
-  try{await callClaude(prompt,sys,'intake-result');}catch(e){showResult('intake-result','Error: '+e.message);}
-  hideLoading('intake-loading');
+
+  const gradeFilter = v('i-repertory') ? 'All grades' : 'All grades';
+  const amel = v('i-amel'), aggr = v('i-aggr'), mental = v('i-mental'), generals = v('i-generals');
+
+  // Build combined search from all symptoms
+  const allTerms = [complaint, amel, aggr, mental, generals].filter(Boolean).join(' ');
+  const results = searchRepertory(allTerms, 'All grades', 'All');
+
+  // Tally remedy scores across matching rubrics
+  const remedyTally = {};
+  results.forEach(rubric => {
+    const remedies = filterRemediesByGrade(rubric.remedies, 'All grades');
+    remedies.forEach(([rem, grade]) => {
+      if(!remedyTally[rem]) remedyTally[rem] = {total:0, rubrics:[], maxGrade:0};
+      remedyTally[rem].total += grade * rubric.score;
+      remedyTally[rem].rubrics.push({rubric:rubric.rubric, grade, source:rubric.source});
+      remedyTally[rem].maxGrade = Math.max(remedyTally[rem].maxGrade, grade);
+    });
+  });
+
+  const topRemedies = Object.entries(remedyTally)
+    .sort((a,b) => b[1].total - a[1].total)
+    .slice(0, 8);
+
+  let out = '';
+  out += '═══ REPERTORIZATION ANALYSIS ═══\n';
+  out += `Chief Complaint: ${complaint}\n`;
+  if(amel) out += `Amelioration: ${amel}\n`;
+  if(aggr)  out += `Aggravation: ${aggr}\n`;
+  if(mental) out += `Mentals: ${mental}\n`;
+  if(generals) out += `Generals: ${generals}\n`;
+  out += `\n`;
+
+  if(results.length === 0){
+    out += 'No matching rubrics found. Try broader search terms.\n';
+  } else {
+    out += `─── MATCHING RUBRICS (${results.length} found) ───\n\n`;
+    results.slice(0,6).forEach((r,i) => {
+      out += `${i+1}. ${r.rubric}  [${r.source}]\n`;
+      const top = filterRemediesByGrade(r.remedies,'All grades').slice(0,6);
+      top.forEach(([rem,g]) => {
+        out += `   ${gradeSymbol(g)} ${remedyName(rem)} (Gr.${g})\n`;
+      });
+      if(r.crossRef && r.crossRef.length) out += `   → See also: ${r.crossRef.join(' | ')}\n`;
+      out += '\n';
+    });
+
+    if(topRemedies.length > 0){
+      out += `─── TOP REMEDY CANDIDATES ───\n\n`;
+      topRemedies.slice(0,5).forEach(([rem, data], i) => {
+        out += `${i+1}. ${remedyName(rem)}\n`;
+        out += `   Highest grade: ${gradeName(data.maxGrade)}\n`;
+        const topRubs = data.rubrics.sort((a,b)=>b.grade-a.grade).slice(0,3);
+        topRubs.forEach(r => out += `   • ${r.rubric} [Gr.${r.grade}]\n`);
+        out += '\n';
+      });
+
+      out += `─── CROSS-REFERENCE SUGGESTIONS ───\n`;
+      const topRem = results[0];
+      if(topRem && topRem.crossRef) topRem.crossRef.forEach(c => out += `• ${c}\n`);
+    }
+  }
+
+  setTimeout(()=>{
+    showResult('intake-result', out);
+    hideLoading('intake-loading');
+  }, 400);
 }
 
-// ── REPERTORY ──────────────────────────────────────────────────────────────
-async function runRepertory(){
-  const symptom=v('r-symptom');if(!symptom){document.getElementById('r-symptom').focus();return;}
+// ── REPERTORY LOOKUP ─────────────────────────────────────────────────────────
+function runRepertory(){
+  const symptom = v('r-symptom');
+  if(!symptom){document.getElementById('r-symptom').focus();return;}
   document.getElementById('rep-result').classList.remove('show');
   showLoading('rep-loading');
-  const rep=v('r-repertory')||"Kent's Repertory";
-  const grade=v('r-grade')||"All grades";
-  const cross=v('r-cross');
-  const sys='You are an expert homeopathic repertorist. Respond concisely and directly to a qualified practitioner. Plain text only, no markdown.';
-  const prompt=`Symptom: ${symptom} | Repertory: ${rep} | Grade: ${grade}${cross?' | Cross-ref: '+cross:''}\n\n1) Best rubrics in ${rep} with chapter/section  2) Graded remedy list  3) Key agg/amel sub-rubrics  ${cross?'4) Coverage across cross-ref rubrics':'4) 2 suggested cross-ref rubrics'}  5) Brief prescribing note for top 2 remedies`;
-  try{await callClaude(prompt,sys,'rep-result');}catch(e){showResult('rep-result','Error: '+e.message);}
-  hideLoading('rep-loading');
+
+  const source = v('r-repertory') || 'All';
+  const gradeFilter = v('r-grade') || 'All grades';
+  const cross = v('r-cross');
+
+  const srcMap = {"Kent's Repertory":"Kent","Boericke's":"Boericke","Boenninghausen's":"Boenninghausen","Murphy's":"Murphy","All / Synthesis":"All"};
+  const srcKey = srcMap[source] || 'All';
+
+  const results = searchRepertory(symptom, gradeFilter, srcKey);
+
+  let out = `═══ REPERTORY LOOKUP ═══\n`;
+  out += `Symptom: ${symptom}\n`;
+  out += `Repertory: ${source}  |  Grade filter: ${gradeFilter}\n\n`;
+
+  if(results.length === 0){
+    out += 'No matching rubrics found in the selected repertory.\nTry: broader terms, different spelling, or "All / Synthesis".\n';
+  } else {
+    out += `─── MATCHING RUBRICS (${results.length}) ───\n\n`;
+    results.forEach((r,i) => {
+      out += `${i+1}. ${r.rubric}  [${r.source}]\n`;
+      const remedies = filterRemediesByGrade(r.remedies, gradeFilter);
+      if(remedies.length === 0){ out += `   (No remedies match grade filter)\n\n`; return; }
+
+      // Group by grade
+      [4,3,2,1].forEach(g => {
+        const atGrade = remedies.filter(([,gr])=>gr===g);
+        if(atGrade.length===0) return;
+        out += `   ${gradeName(g)}:\n`;
+        atGrade.forEach(([rem])=> out += `     ${gradeSymbol(g)} ${remedyName(rem)}\n`);
+      });
+
+      if(r.crossRef && r.crossRef.length){
+        out += `   Cross-references:\n`;
+        r.crossRef.forEach(c => out += `     → ${c}\n`);
+      }
+      out += '\n';
+    });
+
+    // Cross-ref from user input
+    if(cross){
+      out += `─── USER CROSS-REFERENCE: "${cross}" ───\n`;
+      const crossResults = searchRepertory(cross, 'All grades', 'All');
+      if(crossResults.length === 0){ out += 'No matching rubrics found for cross-reference.\n'; }
+      else {
+        crossResults.slice(0,3).forEach(r => {
+          out += `${r.rubric}  [${r.source}]\n`;
+          filterRemediesByGrade(r.remedies,'All grades').slice(0,5).forEach(([rem,g])=>out+=`  ${gradeSymbol(g)} ${remedyName(rem)}\n`);
+          out += '\n';
+        });
+      }
+    }
+  }
+
+  setTimeout(()=>{
+    showResult('rep-result', out);
+    hideLoading('rep-loading');
+  }, 300);
 }
 
 // ── MATERIA MEDICA ─────────────────────────────────────────────────────────
-async function runMateria(){
-  const remedy=document.getElementById('mm-remedy').value.trim();
+const MATERIA_MEDICA = {
+  "Arsenicum album":{miasm:"Psora/Syphilis",constitution:"Thin, anxious, restless, fastidious",thermal:"Chilly",thirst:"Frequent small sips, cold water",mental:"Anxiety about health, fear of death, restlessness, fastidiousness, despair",generals:"Worse: midnight–2am, cold, alone. Better: warmth, company, hot drinks",keynotes:["Restlessness with exhaustion","Burning pains better heat","Thirst for sips","Worse 1–2am","Fear of death and disease","Fastidious, critical","Triangular red tip of tongue","Offensive discharges"],potency:"30C–1M. Repeat as needed in acute. Single dose in chronic.",relations:"Complementary: Thuj, Nat-s. Follows well: Ipec, Verat. Antidotes: Camph, Carb-v"},
+  "Pulsatilla":{miasm:"Psora/Sycosis",constitution:"Mild, yielding, weepy, fair",thermal:"Warm (< heat)",thirst:"Thirstless",mental:"Mild, gentle, weepy, craves consolation, changeable moods, yielding",generals:"Worse: heat, rich food, evening, closed room. Better: open air, cold, gentle motion, consolation",keynotes:["Thirstless even with fever","Weeps easily","Symptoms changeable and contradictory","Craves open air","Better consolation","Bland yellow-green discharges","No two symptoms alike"],potency:"30C–200C. Often single dose. Sensitive patients.",relations:"Complementary: Sil, Kali-s, Lyc. Antidotes: Coff, Ign, Nux-v"},
+  "Nux vomica":{miasm:"Psora",constitution:"Thin, irritable, ambitious, sedentary",thermal:"Chilly",thirst:"Thirsty",mental:"Irritable, oversensitive, ambitious, fault-finding, cannot bear contradiction",generals:"Worse: morning, mental exertion, cold, after eating, stimulants. Better: rest, hot drinks, wrapping up",keynotes:["Oversensitivity to all impressions","Worse early morning","Chilly yet averse to stuffy rooms","Constipation with urging","Spasmodic complaints","Sedentary habits, overeating"],potency:"30C in acute. 200C in chronic. Avoid crude.",relations:"Complementary: Sep, Sulph. Antidotes: Coff, Ign, Cocc"},
+  "Sulphur":{miasm:"Psora",constitution:"Lean or stout, untidy, philosophical",thermal:"Hot",thirst:"Thirsty",mental:"Philosophical, theorising, selfish, lazy, curious, forgetful",generals:"Worse: warmth, washing, standing, 11am. Better: dry warm weather, open air",keynotes:["Burning sensation everywhere","Worse 11am hunger","Standing aggravates","Dislike of washing","Hot feet at night","Redness of orifices","Relapsing cases"],potency:"30C to 10M. Excellent intercurrent. Avoid low potencies in itch.",relations:"Complementary: Aloe, Psor. Follows: Acon, Bry, Merc"},
+  "Lycopodium":{miasm:"Psora/Sycosis",constitution:"Lean, intellectual, weak digestion",thermal:"Warm",thirst:"Little or moderate",mental:"Lack of confidence, cowardly, domineering at home, craves sweets, flatulence",generals:"Worse: 4–8pm, right side, pressure of clothes. Better: warm drinks, motion, after midnight",keynotes:["Right-sided complaints","Worse 4–8pm","Flatulence, distension","Craves sweets","Cowardly yet domineering","Fan-like motion of nostrils"],potency:"200C–10M. Single dose chronic. Avoid repetition.",relations:"Complementary: Iod, Graph, Chel. Follows: Calc, Sulph"},
+  "Calcarea carbonica":{miasm:"Psora",constitution:"Fat, fair, flabby, slow",thermal:"Chilly",thirst:"Variable",mental:"Obstinate, slow, fearful, forgetful, anxious about trifles",generals:"Worse: cold, wet, exertion, mental or physical. Better: dry weather, lying on painful side",keynotes:["Sweating of head on pillow","Sour discharges","Craves eggs","Cold and damp extremities","Slow development","Fears disease and insanity"],potency:"30C–200C. Single dose chronic.",relations:"Complementary: Bell, Rhus-t. Antidotes: Nit-ac, Sulph"},
+  "Natrum muriaticum":{miasm:"Psora",constitution:"Thin, reserved, anaemic, depressed",thermal:"Warm",thirst:"Excessive",mental:"Reserved, cannot weep in company, dwells on past, grief, cannot be consoled",generals:"Worse: 10am, sea, heat, consolation. Better: open air, cold bathing, lying on right side",keynotes:["Great thirst for cold water","Craves salt","Worse consolation","Herpetic eruptions (lips)","Headache like hammers","Mapped tongue","Anaemia with hunger"],potency:"30C–1M. Avoid repetition in high. 200C single dose.",relations:"Complementary: Apis, Sep. Antidotes: Ars, Phos"},
+  "Sepia":{miasm:"Psora/Sycosis",constitution:"Lean, dark, bearing-down sensation",thermal:"Chilly",thirst:"Little",mental:"Indifferent to family, irritable, weeps when telling symptoms, loves dancing",generals:"Worse: cold, before menses, morning, consolation. Better: exercise, warmth, pressure",keynotes:["Bearing-down sensation in pelvis","Indifference to loved ones","Yellow-brown saddle across nose","Craves pickles and vinegar","Flushes of heat menopause","Worse standing"],potency:"30C–10M. Single dose.",relations:"Complementary: Nat-m, Puls. Antidotes: Acon, Rhus-t"},
+  "Phosphorus":{miasm:"Psora/Tubercular",constitution:"Tall, thin, refined, artistic",thermal:"Warm",thirst:"Cold drinks",mental:"Anxious, impressionable, affectionate, fears thunderstorm and dark",generals:"Worse: cold, lying left side, evening, touch. Better: cold food/drinks, sleep, rubbing",keynotes:["Craves cold drinks (vomits when warm)","Haemorrhages bright red","Burning between shoulder blades","Tall slim constitution","Sensitive to all impressions","Hepatic affections"],potency:"30C–1M. Single dose. Avoid high in tubercular.",relations:"Complementary: Ars, Carb-v. Follows: Sulph, Bry"},
+  "Ignatia amara":{miasm:"Psora",constitution:"Dark, nervous, sensitive women",thermal:"Variable",thirst:"Variable",mental:"Grief, contradictions, sighing, silent brooding, cannot bear tobacco",generals:"Worse: tobacco, coffee, grief, consolation. Better: change of position, hard pressure",keynotes:["Contradictory symptoms","Sighing and sobbing","Lump in throat (globus)","Involuntary weeping or laughing","Ailments from grief","Paradoxical modalities"],potency:"200C single dose. Avoid repetition.",relations:"Complementary: Nat-m. Follows: Acon. Antidotes: Puls, Cham"},
+};
+
+function runMateria(){
+  const remedy = document.getElementById('mm-remedy').value.trim();
   if(!remedy){document.getElementById('mm-remedy').focus();return;}
   document.getElementById('mm-result').classList.remove('show');
   showLoading('mm-loading');
-  const focus=document.getElementById('mm-focus').value;
-  const compare=document.getElementById('mm-compare').value.trim();
-  const sys='You are an expert classical homeopathic Materia Medica physician. Concise, direct, practitioner-level. Plain text only, no markdown.';
-  const fm={
-    'Full profile':`Full MM profile of ${remedy}: miasm, constitution, mental/emotional picture, generals, modalities, keynotes, potency guidance, relationships.`,
-    'Keynotes only':`Top 12 keynotes of ${remedy} grouped: Mentals / Generals / Particulars. Concise.`,
-    'Mentals & generals':`Mental/emotional picture and generals of ${remedy}: fears, disposition, thermal, thirst, sleep, food, perspiration.`,
-    'Modalities':`All key modalities of ${remedy}: general amel, general agg, particular amel/agg, time, position, weather.`,
-    'Miasmatic analysis':`Miasmatic analysis of ${remedy}: primary/secondary miasm, keynotes per miasm, prescribing phase.`,
-    'Potency & dosing guidance':`Potency & dosing for ${remedy}: low/mid/high range, LM scale, acute vs chronic repetition, aggravation management, antidotes.`,
-    'Compare with another remedy':compare?`Compare ${remedy} vs ${compare}: similarities, key differences, mentals, generals/modalities, when to choose each, potency preference.`:`Full profile of ${remedy}.`,
-  };
-  try{await callClaude(fm[focus]||fm['Full profile'],sys,'mm-result');}catch(e){showResult('mm-result','Error: '+e.message);}
-  hideLoading('mm-loading');
+  const focus = document.getElementById('mm-focus').value;
+  const compare = document.getElementById('mm-compare').value.trim();
+
+  // Find remedy in DB (fuzzy)
+  const key = Object.keys(MATERIA_MEDICA).find(k =>
+    k.toLowerCase().includes(remedy.toLowerCase()) ||
+    remedy.toLowerCase().includes(k.toLowerCase().split(' ')[0])
+  );
+
+  // Also search repertory for this remedy
+  const remCode = Object.entries(REMEDY_NAMES).find(([c,n]) =>
+    n.toLowerCase().includes(remedy.toLowerCase()) ||
+    remedy.toLowerCase().includes(n.toLowerCase().split(' ')[0])
+  );
+
+  let out = '';
+
+  if(focus === 'Compare with another remedy' && compare){
+    const key2 = Object.keys(MATERIA_MEDICA).find(k =>
+      k.toLowerCase().includes(compare.toLowerCase()) ||
+      compare.toLowerCase().includes(k.toLowerCase().split(' ')[0])
+    );
+    const mm1 = key ? MATERIA_MEDICA[key] : null;
+    const mm2 = key2 ? MATERIA_MEDICA[key2] : null;
+    out += `═══ COMPARISON: ${key||remedy} vs ${key2||compare} ═══\n\n`;
+    if(mm1 && mm2){
+      const rows = ['miasm','constitution','thermal','thirst','mental','generals'];
+      rows.forEach(r => {
+        out += `${r.toUpperCase()}:\n`;
+        out += `  ${key}: ${mm1[r]}\n`;
+        out += `  ${key2}: ${mm2[r]}\n\n`;
+      });
+    } else {
+      if(!mm1) out += `${remedy}: not in built-in database yet.\n`;
+      if(!mm2) out += `${compare}: not in built-in database yet.\n`;
+    }
+    setTimeout(()=>{showResult('mm-result',out);hideLoading('mm-loading');},300);
+    return;
+  }
+
+  if(!key){
+    // Search repertory for remedy appearances
+    out += `${remedy} — not yet in built-in Materia Medica.\n\n`;
+    if(remCode){
+      const [code] = remCode;
+      const appearances = REPERTORY.filter(r => r.remedies[code]).sort((a,b)=>b.remedies[code]-a.remedies[code]);
+      if(appearances.length > 0){
+        out += `─── FOUND IN ${appearances.length} REPERTORY RUBRICS ───\n\n`;
+        appearances.slice(0,15).forEach(r => {
+          out += `${gradeSymbol(r.remedies[code])} [Gr.${r.remedies[code]}] ${r.rubric}  [${r.source}]\n`;
+        });
+      }
+    }
+    out += `\nUpload a JSON repertory file with this remedy's full Materia Medica to enhance results.`;
+    setTimeout(()=>{showResult('mm-result',out);hideLoading('mm-loading');},300);
+    return;
+  }
+
+  const mm = MATERIA_MEDICA[key];
+  out += `═══ MATERIA MEDICA: ${key.toUpperCase()} ═══\n\n`;
+
+  if(focus === 'Full profile'){
+    out += `MIASM: ${mm.miasm}\nCONSTITUTION: ${mm.constitution}\nTHERMAL: ${mm.thermal}\nTHIRST: ${mm.thirst}\n\n`;
+    out += `MENTAL / EMOTIONAL:\n${mm.mental}\n\n`;
+    out += `GENERALS & MODALITIES:\n${mm.generals}\n\n`;
+    out += `KEYNOTES:\n${mm.keynotes.map((k,i)=>`${i+1}. ${k}`).join('\n')}\n\n`;
+    out += `POTENCY & DOSING:\n${mm.potency}\n\n`;
+    out += `RELATIONSHIPS:\n${mm.relations}\n`;
+  } else if(focus === 'Keynotes only'){
+    out += `KEYNOTES:\n${mm.keynotes.map((k,i)=>`${i+1}. ${k}`).join('\n')}\n`;
+  } else if(focus === 'Mentals & generals'){
+    out += `MENTAL / EMOTIONAL:\n${mm.mental}\n\nGENERALS:\n${mm.generals}\n`;
+  } else if(focus === 'Modalities'){
+    out += `MODALITIES (from Generals):\n${mm.generals}\n\nTHERMAL: ${mm.thermal}\nTHIRST: ${mm.thirst}\n`;
+  } else if(focus === 'Miasmatic analysis'){
+    out += `MIASM: ${mm.miasm}\nCONSTITUTION: ${mm.constitution}\n`;
+  } else if(focus === 'Potency & dosing guidance'){
+    out += `POTENCY & DOSING:\n${mm.potency}\n\nRELATIONSHIPS:\n${mm.relations}\n`;
+  }
+
+  // Append repertory appearances
+  if(remCode){
+    const [code] = remCode;
+    const appearances = REPERTORY.filter(r => r.remedies[code] >= 3).sort((a,b)=>b.remedies[code]-a.remedies[code]);
+    if(appearances.length){
+      out += `\n─── TOP RUBRICS IN REPERTORY ───\n`;
+      appearances.slice(0,8).forEach(r => {
+        out += `${gradeSymbol(r.remedies[code])} [Gr.${r.remedies[code]}] ${r.rubric}  [${r.source}]\n`;
+      });
+    }
+  }
+
+  setTimeout(()=>{showResult('mm-result',out);hideLoading('mm-loading');},300);
 }
 
-// ── FOLLOW-UP ──────────────────────────────────────────────────────────────
-async function runFollowup(){
+// ── FOLLOW-UP (local logic) ─────────────────────────────────────────────────
+function runFollowup(){
   const remedy=v('f-remedy'),original=v('f-original');
   if(!remedy||!original){document.getElementById(remedy?'f-original':'f-remedy').focus();return;}
   document.getElementById('fu-result').classList.remove('show');
   showLoading('fu-loading');
-  const sys='You are an expert classical homeopathic physician. Concise, direct, practitioner-level. Plain text only, no markdown.';
-  const prompt=`Follow-up: ${remedy}${v('f-potency')?' '+v('f-potency'):''}${v('f-date')?', elapsed '+v('f-date'):''}\nOriginal complaint: ${original}\nImprovement ${document.getElementById('f-improvement').value}/10 | Vitality ${document.getElementById('f-vitality').value}/10 | Response: ${document.getElementById('f-response').value}\nMentals: ${document.getElementById('f-mental-change').value} | Sleep: ${document.getElementById('f-sleep').value}${v('f-current')?'\nCurrent Sx: '+v('f-current'):''}${v('f-hering')?'\nHering: '+v('f-hering'):''}\n\n1) Response interpretation (curative/palliative/suppression, Hering's law)  2) Best action with justification  3) Next prescription: remedy, potency, dose  4) Watch for / red flags`;
-  try{await callClaude(prompt,sys,'fu-result');}catch(e){showResult('fu-result','Error: '+e.message);}
-  hideLoading('fu-loading');
+
+  const improvement = parseInt(document.getElementById('f-improvement').value);
+  const vitality    = parseInt(document.getElementById('f-vitality').value);
+  const response    = document.getElementById('f-response').value;
+  const mental      = document.getElementById('f-mental-change').value;
+  const sleep       = document.getElementById('f-sleep').value;
+  const hering      = v('f-hering');
+  const current     = v('f-current');
+  const potency     = v('f-potency');
+  const elapsed     = v('f-date');
+
+  let out = `═══ FOLLOW-UP ASSESSMENT ═══\n`;
+  out += `Remedy: ${remedy}${potency?' | Potency: '+potency:''}${elapsed?' | Elapsed: '+elapsed:''}\n`;
+  out += `Original complaint: ${original}\n\n`;
+
+  out += `─── RESPONSE SCORES ───\n`;
+  out += `Improvement: ${improvement}/10  |  Vitality: ${vitality}/10\n`;
+  out += `Nature: ${response}\n`;
+  out += `Mentals: ${mental}  |  Sleep: ${sleep}\n\n`;
+
+  // Interpretation logic
+  out += `─── INTERPRETATION ───\n`;
+  let action = '';
+
+  if(response.includes('Good improvement') && improvement >= 6 && vitality >= 6){
+    out += `CURATIVE RESPONSE — Hering's direction being followed.\nMentals improved or stable: good prognostic sign.\n`;
+    action = improvement >= 8
+      ? `WAIT — remedy still acting. Do not repeat. Observe.\n`
+      : `WAIT and watch. If plateau in 2–4 weeks, consider second dose or step up potency.\n`;
+  } else if(response.includes('Initial aggravation then improvement')){
+    out += `HOMEOPATHIC AGGRAVATION followed by improvement — curative response.\n`;
+    action = `WAIT — this is a positive sign. Allow remedy to complete action.\nRepeat only if relapse occurs after clear improvement.\n`;
+  } else if(response.includes('Return of old symptoms')){
+    out += `RETURN OF OLD SYMPTOMS — Hering's law in action (curative direction).\n`;
+    action = `WAIT and observe. This is a good prognostic sign.\nOld symptoms should pass without treatment.\n`;
+  } else if(response.includes('No response') && improvement <= 2){
+    out += `NO RESPONSE — remedy may be incorrect, potency unsuitable, or obstacle to cure.\n`;
+    action = `REVIEW the case:\n• Re-take the case — missed symptoms?\n• Consider miasmatic intercurrent (Sulphur, Psor, Med)\n• Check for maintaining cause (diet, lifestyle, suppressions)\n• Consider different potency or LM scale\n`;
+  } else if(response.includes('Partial improvement') || (improvement >= 4 && improvement <= 6)){
+    out += `PARTIAL RESPONSE — partial simillimum or potency needs adjustment.\n`;
+    action = improvement >= 5
+      ? `WAIT 2–4 more weeks. If plateau continues, step up potency (e.g. ${potency||'200C'} → ${potency&&potency.includes('200')?'1M':'200C'}).\n`
+      : `Consider: repetition of same remedy in higher potency, OR re-examine for complementary remedy.\n`;
+  } else if(response.includes('Aggravation without improvement')){
+    out += `AGGRAVATION WITHOUT IMPROVEMENT — prolonged or pathological aggravation.\n`;
+    action = `ANTIDOTE if necessary. Give complementary remedy or wait.\nDo NOT repeat the aggravating remedy.\nConsider: wrong remedy, oversensitive patient, too high potency.\n`;
+  } else if(response.includes('Improvement then relapse')){
+    out += `RELAPSE after improvement — remedy action exhausted or maintaining cause.\n`;
+    action = `Repeat same remedy in same or higher potency.\nCheck for maintaining causes (suppressions, stress, diet).\nConsider split dose or LM scale for sensitive patients.\n`;
+  } else {
+    out += `MIXED RESPONSE — careful interpretation needed.\n`;
+    action = `Re-evaluate case totality. Note any new symptoms carefully.\n`;
+  }
+
+  out += `\n─── RECOMMENDED ACTION ───\n${action}`;
+
+  if(hering){
+    out += `\n─── HERING'S LAW OBSERVATIONS ───\n${hering}\n`;
+    out += `Assessment: Check direction — from above downward, centre to periphery, in reverse order of appearance = curative.\n`;
+  }
+
+  if(current){
+    out += `\n─── CURRENT SYMPTOMS ───\n${current}\n`;
+    // Search repertory for current symptoms
+    const currResults = searchRepertory(current,'All grades','All');
+    if(currResults.length > 0){
+      out += `\nRelevant rubrics for current symptoms:\n`;
+      currResults.slice(0,3).forEach(r => {
+        out += `• ${r.rubric}  [${r.source}]\n`;
+        filterRemediesByGrade(r.remedies,'Grade 3–4 only (bold)').slice(0,4).forEach(([rem,g])=>{
+          out += `  ${gradeSymbol(g)} ${remedyName(rem)}\n`;
+        });
+      });
+    }
+  }
+
+  out += `\n─── RED FLAGS ───\n`;
+  out += `• Rapid deterioration of vitality — seek urgent review\n`;
+  out += `• Suppression of skin with internal worsening — antidote and review\n`;
+  out += `• Onset of new pathology — reassess totality\n`;
+  out += `• No response after 3 properly chosen remedies — consider pathological diagnosis\n`;
+
+  setTimeout(()=>{showResult('fu-result',out);hideLoading('fu-loading');},400);
 }
 
 // ── GOOGLE DRIVE ───────────────────────────────────────────────────────────
